@@ -1,0 +1,55 @@
+# Download raw TrackML data from Kaggle onto the shared PVC.
+#
+# Before running:
+#   1. Accept the competition rules once at
+#      https://www.kaggle.com/competitions/trackml-particle-identification/rules
+#   2. Create the credentials secret (from your Kaggle account > API > token):
+#      kubectl -n cms-ml create secret generic kaggle-credentials \
+#        --from-literal=KAGGLE_USERNAME=<user> --from-literal=KAGGLE_KEY=<key>
+#
+# FILES defaults to the 100-event train_sample (enough for phase 0) plus the
+# detector geometry. Add train_1.zip (about 1,770 events) when you need more.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fetch-trackml
+  namespace: cms-ml
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fetch
+          image: python:3.11-slim
+          env:
+            - name: FILES
+              value: "train_sample.zip detectors.zip"
+          envFrom:
+            - secretRef:
+                name: kaggle-credentials
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              apt-get update -qq && apt-get install -y -qq unzip > /dev/null
+              pip install -q kaggle
+              dest=/data/raw/trackml
+              mkdir -p "$dest"
+              for f in $FILES; do
+                kaggle competitions download -c trackml-particle-identification -f "$f" -p "$dest"
+                unzip -q -o "$dest/$f" -d "$dest"
+                rm -f "$dest/$f"
+              done
+              du -sh "$dest"/*
+          resources:
+            requests: {cpu: "2", memory: 4Gi}
+            limits: {cpu: "2", memory: 4Gi}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: track-ssm-vol

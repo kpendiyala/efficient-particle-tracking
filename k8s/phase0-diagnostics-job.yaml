@@ -1,0 +1,70 @@
+# Phase 0: CPU-only serialization diagnostics on raw TrackML events.
+#
+# Reads /data/raw/trackml/train_100_events (the unzipped train_sample) and
+# writes /data/runs/phase0/{pixel,full}/ with per_event.csv, summary.csv and
+# summary.md. Runs the pixel-only and full-detector passes back to back.
+#
+# The repo is cloned at start, so commit changes before launching. If the
+# repo is private, create a read-only token secret first:
+#   kubectl -n cms-ml create secret generic github-token --from-literal=GITHUB_TOKEN=<token>
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: phase0-diagnostics
+  namespace: cms-ml
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+        - name: clone
+          image: alpine/git:2.45.2
+          env:
+            - name: REF
+              value: main
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef: {name: github-token, key: GITHUB_TOKEN, optional: true}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              auth=${GITHUB_TOKEN:+x-access-token:$GITHUB_TOKEN@}
+              git clone --depth 1 --branch "$REF" \
+                "https://${auth}github.com/kpendiyala/efficient-particle-tracking.git" /work/repo
+          volumeMounts:
+            - name: work
+              mountPath: /work
+      containers:
+        - name: diagnostics
+          image: python:3.11-slim
+          workingDir: /work/repo
+          env:
+            - name: EVENTS
+              value: "100"
+            - name: DATA_DIR
+              value: /data/raw/trackml/train_100_events
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              pip install -q -e .
+              for det in pixel full; do
+                python scripts/phase0_diagnostics.py --data-dir "$DATA_DIR" --detector "$det" \
+                  --events "$EVENTS" --workers 8 --out "/data/runs/phase0/$det"
+              done
+          resources:
+            requests: {cpu: "8", memory: 32Gi}
+            limits: {cpu: "8", memory: 32Gi}
+          volumeMounts:
+            - name: work
+              mountPath: /work
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: work
+          emptyDir: {}
+        - name: data
+          persistentVolumeClaim:
+            claimName: track-ssm-vol
