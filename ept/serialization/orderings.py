@@ -11,6 +11,7 @@ from typing import Callable
 import numpy as np
 
 from .curves import hilbert_index_2d, quantize, zorder_index_2d
+from .heptv2_lsh import heptv2_lsh
 
 # TrackML solenoid field (T). Curvature conversion: R[m] = pT[GeV] / (0.3 * B[T]).
 B_FIELD_T = 2.0
@@ -38,7 +39,10 @@ def eta_phi_curve(event: Event, curve: str = "hilbert", bits: int = 10, phi=None
 
 
 def lsh(event: Event, num_hashes: int = 3, num_regions: int = 100, seed: int = 0, **_) -> list[np.ndarray]:
-    """OR-AND E2LSH ordering in (eta, phi), approximating HEPTv2's encoder.
+    """OR-AND E2LSH ordering in (eta, phi), a simplified stand-in for HEPTv2's encoder.
+
+    Prefer ``heptv2_lsh`` (a faithful port) as the baseline; this one is kept so
+    earlier phase-0 runs stay reproducible.
 
     Per hash: an AND step partitions hits into a coarse (eta, phi) quantile
     grid with a random aspect ratio and roughly ``num_regions`` cells; inside
@@ -105,6 +109,7 @@ ORDERINGS: dict[str, Ordering] = {
     "hilbert": lambda e, **kw: eta_phi_curve(e, curve="hilbert", **kw),
     "zorder": lambda e, **kw: eta_phi_curve(e, curve="zorder", **kw),
     "lsh": lsh,
+    "heptv2_lsh": heptv2_lsh,
     "helix": helix,
     "random": random_order,
 }
@@ -129,5 +134,10 @@ def parse_spec(spec: str) -> tuple[str, dict]:
 
 
 def serialize(event: Event, spec: str) -> list[np.ndarray]:
-    name, kwargs = parse_spec(spec)
-    return ORDERINGS[name](event, **kwargs)
+    """Orders for ``spec``. Join specs with ``+`` to pool their orders into one scheme,
+    e.g. ``helix:num_bins=5+heptv2_lsh:num_hashes=1,num_heads=4`` (9 orders)."""
+    perms = []
+    for part in spec.split("+"):
+        name, kwargs = parse_spec(part)
+        perms += ORDERINGS[name](event, **kwargs)
+    return perms
