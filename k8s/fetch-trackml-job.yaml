@@ -3,9 +3,18 @@
 # Before running:
 #   1. Accept the competition rules once at
 #      https://www.kaggle.com/competitions/trackml-particle-identification/rules
-#   2. Create the credentials secret (from your Kaggle account > API > token):
-#      kubectl -n cms-ml create secret generic kaggle-credentials \
-#        --from-literal=KAGGLE_USERNAME=<user> --from-literal=KAGGLE_KEY=<key>
+#   2. Create the credentials secret. Generate a token at
+#      https://www.kaggle.com/settings/api ("Generate New Token"), then either:
+#        kubectl -n cms-ml create secret generic kaggle-credentials \
+#          --from-literal=KAGGLE_API_TOKEN=<token>
+#      or, with a legacy kaggle.json (username + key):
+#        kubectl -n cms-ml create secret generic kaggle-credentials \
+#          --from-file=kaggle.json=$HOME/.kaggle/kaggle.json
+#      Check which keys the secret holds (names only, no values):
+#        kubectl -n cms-ml describe secret kaggle-credentials
+#      To replace a wrong secret: kubectl -n cms-ml delete secret kaggle-credentials,
+#      then create it again. Delete the failed Job before re-applying:
+#        kubectl -n cms-ml delete job fetch-trackml
 #
 # FILES defaults to the 100-event train_sample (enough for phase 0) plus the
 # detector geometry. Add train_1.zip (about 1,770 events) when you need more.
@@ -26,21 +35,42 @@ spec:
           env:
             - name: FILES
               value: "train_sample.zip detectors.zip"
-          envFrom:
-            - secretRef:
-                name: kaggle-credentials
+            - name: DEBIAN_FRONTEND
+              value: noninteractive
+            - name: PIP_ROOT_USER_ACTION
+              value: ignore
           command: ["/bin/bash", "-c"]
           args:
             - |
               set -euo pipefail
-              apt-get update -qq && apt-get install -y -qq unzip > /dev/null
-              pip install -q kaggle
+              # Accept any of: a KAGGLE_API_TOKEN key, KAGGLE_USERNAME + KAGGLE_KEY
+              # keys, or a kaggle.json / access_token file in the secret.
+              creds=/secrets/kaggle
+              echo "Keys found in secret: $(ls "$creds" | tr '\n' ' ')"
+              mkdir -p ~/.kaggle
+              for k in KAGGLE_API_TOKEN KAGGLE_USERNAME KAGGLE_KEY; do
+                [ -f "$creds/$k" ] && export "$k=$(tr -d '[:space:]' < "$creds/$k")"
+              done
+              [ -f "$creds/kaggle.json" ] && install -m 600 "$creds/kaggle.json" ~/.kaggle/kaggle.json
+              [ -f "$creds/access_token" ] && install -m 600 "$creds/access_token" ~/.kaggle/access_token
+              # A new-style token stored under KAGGLE_KEY without a username.
+              if [ -z "${KAGGLE_API_TOKEN:-}" ] && [ -z "${KAGGLE_USERNAME:-}" ] && [ -n "${KAGGLE_KEY:-}" ]; then
+                export KAGGLE_API_TOKEN="$KAGGLE_KEY"; unset KAGGLE_KEY
+              fi
+              if [ -z "${KAGGLE_API_TOKEN:-}" ] && [ -z "${KAGGLE_KEY:-}" ] \
+                 && [ ! -f ~/.kaggle/kaggle.json ] && [ ! -f ~/.kaggle/access_token ]; then
+                echo "No usable Kaggle credentials in secret kaggle-credentials; see the comment at the top of this file." >&2
+                exit 1
+              fi
+              apt-get update -qq > /dev/null && apt-get install -y -qq unzip > /dev/null
+              pip install -q "kaggle>=2,<3"
               dest=/data/raw/trackml
               mkdir -p "$dest"
               for f in $FILES; do
                 kaggle competitions download -c trackml-particle-identification -f "$f" -p "$dest"
-                unzip -q -o "$dest/$f" -d "$dest"
-                rm -f "$dest/$f"
+              done
+              for z in "$dest"/*.zip; do
+                unzip -q -o "$z" -d "$dest" && rm -f "$z"
               done
               du -sh "$dest"/*
           resources:
@@ -49,7 +79,13 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: kaggle-credentials
+              mountPath: /secrets/kaggle
+              readOnly: true
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: track-ssm-vol
+        - name: kaggle-credentials
+          secret:
+            secretName: kaggle-credentials
