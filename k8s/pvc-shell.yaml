@@ -1,0 +1,27 @@
+# Small pod for browsing the PVC and copying results out:
+#   kubectl apply -f k8s/pvc-shell.yaml
+#   kubectl -n cms-ml exec -it pvc-shell -- bash
+#   kubectl -n cms-ml cp pvc-shell:/data/runs/phase0 ./phase0-results
+#   kubectl -n cms-ml delete pod pvc-shell   # delete when done
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pvc-shell
+  namespace: cms-ml
+spec:
+  restartPolicy: Never
+  activeDeadlineSeconds: 21600
+  containers:
+    - name: shell
+      image: python:3.11-slim
+      command: ["sleep", "21600"]
+      resources:
+        requests: {cpu: "1", memory: 2Gi}
+        limits: {cpu: "1", memory: 2Gi}
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: track-ssm-vol

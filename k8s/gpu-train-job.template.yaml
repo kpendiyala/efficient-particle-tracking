@@ -1,0 +1,53 @@
+# Template for phase 1+ GPU training (HEPTv2 reproduction, mixer swaps).
+# Not runnable as-is: set IMAGE, the command and the GPU product first.
+#
+# - Pin one GPU type so latency numbers are comparable across runs. List the
+#   labels on the cluster with:
+#     kubectl get nodes -L nvidia.com/gpu.product
+# - HEPTv2 needs PyTorch >= 2.5 (flex_attention) even though its
+#   environment.yml pins 2.3.1; build an image with torch>=2.5, matching PyG
+#   wheels, flash-linear-attention and mamba-ssm.
+# - HEPTv2's loader is an InMemoryDataset: the whole processed file is held in
+#   RAM, so size the memory request to the dataset (Tracking-60k is ~65 GB).
+# - Checkpoint every epoch to /data/runs so a preempted Job can resume.
+# - Check Nautilus' current policies on Job runtime and GPU utilization.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: train-RUN_NAME
+  namespace: cms-ml
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.product
+                    operator: In
+                    values: ["NVIDIA-A100-SXM4-80GB"]  # replace with a label from the command above
+      containers:
+        - name: train
+          image: IMAGE  # e.g. your registry image with torch>=2.5 + fla + mamba-ssm
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              python -m heptv2.run_train --config /data/configs/RUN_NAME.yaml
+          resources:
+            requests: {cpu: "8", memory: 96Gi, nvidia.com/gpu: 1}
+            limits: {cpu: "8", memory: 96Gi, nvidia.com/gpu: 1}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: track-ssm-vol
+        - name: shm
+          emptyDir: {medium: Memory, sizeLimit: 16Gi}
