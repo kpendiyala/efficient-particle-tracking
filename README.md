@@ -44,8 +44,9 @@ python scripts/phase0_diagnostics.py --synthetic 3 --detector full --out runs/ph
 
 On Nautilus (namespace `cms-ml`, PVC `track-ssm-vol` mounted at `/data`):
 
-1. Accept the [TrackML competition rules](https://www.kaggle.com/competitions/trackml-particle-identification/rules) on Kaggle, then create the secret:
-   `kubectl -n cms-ml create secret generic kaggle-credentials --from-literal=KAGGLE_USERNAME=... --from-literal=KAGGLE_KEY=...`
+1. Accept the [TrackML competition rules](https://www.kaggle.com/competitions/trackml-particle-identification/rules) on Kaggle, generate a token at [kaggle.com/settings/api](https://www.kaggle.com/settings/api), then create the secret:
+   `kubectl -n cms-ml create secret generic kaggle-credentials --from-literal=KAGGLE_API_TOKEN=...`
+   (A legacy `kaggle.json` also works: `--from-file=kaggle.json=$HOME/.kaggle/kaggle.json`.)
 2. Fetch data: `kubectl apply -f k8s/fetch-trackml-job.yaml` (100-event `train_sample` plus detector geometry → `/data/raw/trackml/`). Check the unzipped folder name in the logs. The diagnostics Job expects `train_100_events`.
 3. If this repo is private, create a read-only token secret: `kubectl -n cms-ml create secret generic github-token --from-literal=GITHUB_TOKEN=...`
 4. Run: `kubectl apply -f k8s/phase0-diagnostics-job.yaml` → `/data/runs/phase0/{pixel,full}/summary.md`
