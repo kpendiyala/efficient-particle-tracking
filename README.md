@@ -26,8 +26,13 @@ always help `_best`.
 | `random` | Uniform shuffle (floor) |
 | `phi` | Sort by azimuth (HEPTv2's φ ablation) |
 | `hilbert`, `zorder` | Space-filling curve over (η, φ) (PTv3, HEPTv2's Z-H ablation) |
-| `lsh:num_hashes=K` | OR-AND E2LSH in (η, φ), approximating HEPTv2's encoder (not bit-exact) |
+| `heptv2_lsh[:num_hashes=C,num_heads=H]` | HEPTv2's encoder ordering, ported from their code (C×H orders; default 3×8 = 24, one layer). `scripts/check_heptv2_parity.py` checks it against HEPTv2's torch code. |
+| `lsh:num_hashes=K` | Simplified stand-in for HEPTv2's hashing, kept so earlier runs stay comparable. Prefer `heptv2_lsh`. |
 | `helix:num_bins=K` | For K signed curvatures covering p<sub>T</sub> ≥ 0.9 GeV, undo the bend (φ₀ = φ + asin(κr/2)), then Hilbert over (η, φ₀). `num_bins=1` is exactly `hilbert`. |
+
+Join specs with `+` to pool their orders into one scheme, for example
+`helix:num_bins=5+heptv2_lsh:num_hashes=1,num_heads=4` (5 helix orders plus 4 LSH orders, 9 in total).
+Use odd `num_bins` so that κ = 0 (straight tracks) is one of the bins.
 
 Perturbations from the original order-sensitivity RQ compose with any of these:
 `hilbert|reverse`, `hilbert|within_block_shuffle:block_size=128`, `hilbert|block_shuffle:block_size=128`.
@@ -56,7 +61,7 @@ On Nautilus (namespace `cms-ml`, PVC `track-ssm-vol` mounted at `/data`):
 
 ## Go / no-go for helix ordering
 
-Helix ordering earns a place as a method if, compared with `lsh:num_hashes=8` and `hilbert`, it clearly lowers
+Helix ordering earns a place as a method if, compared with HEPTv2's LSH at the same order count and `hilbert`, it clearly lowers
 `pair_gap_median` / raises `pair_within_8` for p<sub>T</sub> < 1.5 GeV tracks, in either the pixel or full detector.
 Back-of-envelope: at 0.9 GeV in 2 T, a track bends about 0.06 rad across the pixel detector but about
 0.35 rad out to the strips, so expect a small effect in `pixel` and a larger one in `full`. The toy

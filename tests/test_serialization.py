@@ -64,3 +64,35 @@ def test_within_block_shuffle_keeps_block_membership():
     perm = np.arange(256)
     out = PERTURBATIONS["within_block_shuffle"](perm, block_size=64)
     assert all(set(out[i : i + 64]) == set(perm[i : i + 64]) for i in range(0, 256, 64))
+
+
+def test_heptv2_lsh_order_count_and_permutations():
+    event = make_event(n_tracks=100, n_noise=50)
+    perms = serialize(event, "heptv2_lsh")
+    assert len(perms) == 24  # HEPTv2 default: 3 hashes x 8 heads
+    assert all(sorted(p) == list(range(len(event["phi"]))) for p in perms)
+    assert len(serialize(event, "heptv2_lsh:num_hashes=1,num_heads=9")) == 9
+
+
+def test_heptv2_lsh_sorts_by_region_cell_first():
+    """The geo shift dominates the projection, so each order visits whole
+    (phi region, eta region) cells one after another."""
+    from ept.serialization.heptv2_lsh import get_regions, quantile_partition
+
+    event = make_event(n_tracks=300, n_noise=100)
+    rng = np.random.default_rng(0)
+    regions_h = get_regions(100, 3, 8, rng)
+    perms = serialize(event, "heptv2_lsh")
+    region_eta = quantile_partition(event["eta"], regions_h[0])
+    region_phi = quantile_partition(event["phi"], regions_h[1])
+    for k, p in enumerate(perms):
+        cell = region_phi[k] * (np.ceil(regions_h[0][k]) + 1) + region_eta[k]
+        assert np.all(np.diff(cell[p]) >= 0)
+
+
+def test_plus_pools_orders():
+    event = make_event(n_tracks=50, n_noise=20)
+    pooled = serialize(event, "helix:num_bins=5+heptv2_lsh:num_hashes=1,num_heads=4")
+    assert len(pooled) == 9
+    helix_only = serialize(event, "helix:num_bins=5")
+    assert all(np.array_equal(a, b) for a, b in zip(pooled[:5], helix_only))

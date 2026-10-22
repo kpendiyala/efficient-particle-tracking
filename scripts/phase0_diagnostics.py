@@ -12,7 +12,9 @@ Examples:
         --detector pixel --events 20 --out /data/runs/phase0/pixel
 
 Spec syntax: ``ordering[:k=v,...][|perturbation[:k=v,...]]``, e.g.
-``helix:num_bins=8`` or ``hilbert|within_block_shuffle:block_size=128``.
+``helix:num_bins=9`` or ``hilbert|within_block_shuffle:block_size=128``. Join
+specs with ``+`` to pool their orders, e.g.
+``helix:num_bins=5+heptv2_lsh:num_hashes=1,num_heads=4``.
 """
 import argparse
 import json
@@ -36,12 +38,15 @@ DEFAULT_SPECS = [
     "phi",
     "zorder",
     "hilbert",
-    "lsh:num_hashes=3",
-    "lsh:num_hashes=8",  # same number of orders as helix:num_bins=8, for a fair "best" comparison
-    "lsh:num_hashes=24",  # HEPTv2: 8 heads x 3 hashes per layer
-    "helix:num_bins=2",
-    "helix:num_bins=4",
-    "helix:num_bins=8",
+    "lsh:num_hashes=9",  # simplified LSH, kept for comparison with earlier runs
+    "heptv2_lsh:num_hashes=1,num_heads=9",  # HEPTv2's hashing, 9 orders
+    "heptv2_lsh",  # HEPTv2's per-layer default: 3 hashes x 8 heads = 24 orders
+    "helix:num_bins=5",
+    "helix:num_bins=9",
+    "helix:num_bins=25",
+    # Pooled: helix orders for curved tracks plus HEPTv2 LSH orders for straight ones.
+    "helix:num_bins=5+heptv2_lsh:num_hashes=1,num_heads=4",  # 9 orders
+    "helix:num_bins=13+heptv2_lsh:num_hashes=1,num_heads=11",  # 24 orders
     "hilbert|reverse",
     "hilbert|within_block_shuffle:block_size=128",
     "hilbert|block_shuffle:block_size=128",
@@ -136,7 +141,11 @@ def main() -> None:
     per_event = pd.DataFrame(rows)
     per_event.to_csv(out / "per_event.csv", index=False)
     metric_cols = [c for c in per_event.columns if c not in ("event", "spec", "pt_bin")]
-    summary = per_event.groupby(["pt_bin", "spec"], sort=False)[metric_cols].mean().reset_index()
+    grouped = per_event.groupby(["pt_bin", "spec"], sort=False)[metric_cols]
+    # Standard error of the mean over events, for error bars.
+    sem = (grouped.std(ddof=1) / np.sqrt(grouped.count())).add_suffix("_sem")
+    summary = pd.concat([grouped.mean(), sem], axis=1).reset_index()
+    summary["n_events"] = grouped.size().to_numpy()
     summary.to_csv(out / "summary.csv", index=False)
 
     headline = [
@@ -147,10 +156,16 @@ def main() -> None:
         "track_one_block_B1024_single",
         "track_fragments_w16_single",
     ]
+    bins = sorted(summary.pt_bin.unique(), key=lambda b: -1.0 if b == "all" else float(b.strip("[(").split(",")[0]))
     with open(out / "summary.md", "w") as f:
-        for label, grp in summary.groupby("pt_bin", sort=False):
+        f.write(f"Mean over {per_event.event.nunique()} events, with ± 95% interval (1.96 x standard error).\n")
+        for label in bins:
+            grp = summary[summary.pt_bin == label]
+            table = grp[["spec", "n_orders"]].copy()
+            for col in headline:
+                table[col] = [f"{m:.4g} ± {1.96 * e:.2g}" if np.isfinite(e) else f"{m:.4g}" for m, e in zip(grp[col], grp[f"{col}_sem"])]
             f.write(f"\n### pT bin: {label}\n\n")
-            f.write(to_markdown(grp[["spec", "n_orders", *headline]]))
+            f.write(to_markdown(table))
     (out / "config.json").write_text(json.dumps(vars(args), indent=2))
     print((out / "summary.md").read_text())
 
